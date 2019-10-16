@@ -1,0 +1,203 @@
+---
+title: "ITS gene raw sequence analysis and quality control"
+author: "A. Fina Bintarti"
+date: October 15th, 2019
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+This is the analysis of ITS 1 region of ITS gene raw sequence data from soil samples taken from apple root zone in Michigan. You can go to the HPCC to begin the tutorial.
+
+##### 1. Copy the raw sequence data to your working directory
+The raw sequence data are stored in fastq file format in this directory:
+```r
+# go to this directory
+cd /mnt/research/ShadeLab/Sequence/raw_sequence/its.tutorial
+
+# copy the fastq files
+cp *.fastq /'path_to_your_working_directory'/
+```
+### Quality checking
+
+##### 2. Quality checking and pre-filtering
+```r
+# count read numbers
+for fastq in ../'your_directory'/*.fastq
+do wc -l $fastq
+done > reads_raw.counts
+
+# produce reads quality graphs using FastQC
+mkdir stats
+
+cat ../'your_directory'/*R1_001.fastq > raw_reads_R1.fastq; cat ../'your_directory'/*R2_001.fastq > raw_reads_R2.fastq
+
+module load FastQC/0.11.7-Java-1.8.0_162
+
+fastqc raw_reads_R1.fastq raw_reads_R2.fastq -o stats && rm -rf raw_reads_R1.fastq raw_reads_R2.fastq
+```
+See this link <https://rtsf.natsci.msu.edu/genomics/tech-notes/fastqc-tutorial-and-faq/> to know more about your FastQC results.
+
+##### 3. Merge paired end reads
+```r
+mkdir mergedfastq
+
+/mnt/research/rdp/public/thirdParty/usearch11.0.667_i86linux64 -fastq_mergepairs ../rawreads/*R1*.fastq -relabel @ -tabbedout merged_tabbed.txt -report merged_summary.txt -fastqout mergedfastq/merged.fastq
+
+# output
+4823385  Pairs (4.8M)
+   3081862  Merged (3.1M, 63.89%)
+   1840814  Alignments with zero diffs (38.16%)
+   1618304  Too many diffs (> 5) (33.55%)
+    123219  No alignment found (2.55%)
+         0  Alignment too short (< 16) (0.00%)
+    417024  Staggered pairs (8.65%) merged & trimmed
+    206.36  Mean alignment length
+    280.99  Mean merged length
+      0.84  Mean fwd expected errors
+      0.63  Mean rev expected errors
+      0.15  Mean merged expected errors
+```
+
+##### 4. Check sequence quality of merged sequences using Usearch and Vsearch
+
+```r
+/mnt/research/rdp/public/thirdParty/usearch11.0.667_i86linux64 -fastq_eestats2 mergedfastq/merged.fastq -output stats_eestats2_USEARCH.txt
+
+# output
+3081862 reads, max len 484, avg 281.0
+
+Length         MaxEE 0.50         MaxEE 1.00         MaxEE 2.00
+------   ----------------   ----------------   ----------------
+    50    3039519( 98.6%)    3053604( 99.1%)    3054830( 99.1%)
+   100    2964751( 96.2%)    3016022( 97.9%)    3019440( 98.0%)
+   150    2927343( 95.0%)    3010078( 97.7%)    3019297( 98.0%)
+   200    2867605( 93.0%)    2971509( 96.4%)    2986914( 96.9%)
+   250    2645566( 85.8%)    2762440( 89.6%)    2782345( 90.3%)
+   300     474191( 15.4%)     529398( 17.2%)     547313( 17.8%)
+   350      88151(  2.9%)     108052(  3.5%)     119661(  3.9%)
+   400       5808(  0.2%)       8161(  0.3%)      10553(  0.3%)
+   450        935(  0.0%)       1422(  0.0%)       1968(  0.1%)
+###############################################################
+
+module load vsearch/2.9.1
+
+vsearch -fastq_stats mergedfastq/merged.fastq -fastq_qmax 42 -log stats_results_VSEARCH.txt
+```
+See this link <https://drive5.com/usearch/manual/cmd_fastq_eestats2.html> for more information about fastq_eestats2 command.
+
+##### 5. Remove primer and adapters with cutadapt
+```r
+################
+CS1-ITS1 (fwd): 5’- CTTGGTCATTTAGAGGAAGTAA – 3’ (EMP/Smith and Peay 2014)
+CS2-ITS2 (rev): 5’- GCTGCGTTCTTCATCGATGC – 3’ (EMP/Smith and Peay 2014)
+Reverse complement of reverse primer: GCATCGATGAAGAACGCAGC
+#################
+
+module load cutadapt/1.16-Python-3.6.4
+
+cutadapt -g CTTGGTCATTTAGAGGAAGTAA -a GCATCGATGAAGAACGCAGC -f fastq -n 2 --discard-untrimmed --match-read-wildcards -o cut_merged.fastq mergedfastq/merged.fastq > cut_adpt_results.txt
+
+/mnt/research/rdp/public/thirdParty/usearch11.0.667_i86linux64 -fastq_eestats2 cut_merged.fastq -output cutdapt_eestats2_USEARCH.txt
+
+# output
+3081551 reads, max len 460, avg 239.0
+
+Length         MaxEE 0.50         MaxEE 1.00         MaxEE 2.00
+------   ----------------   ----------------   ----------------
+    50    3000252( 97.4%)    3018292( 97.9%)    3019597( 98.0%)
+   100    2966813( 96.3%)    3015196( 97.8%)    3019056( 98.0%)
+   150    2905666( 94.3%)    2979376( 96.7%)    2988660( 97.0%)
+   200    2690719( 87.3%)    2780090( 90.2%)    2794214( 90.7%)
+   250    1241945( 40.3%)    1312685( 42.6%)    1329149( 43.1%)
+   300     100390(  3.3%)     119324(  3.9%)     129893(  4.2%)
+   350      14179(  0.5%)      18579(  0.6%)      22524(  0.7%)
+   400       2173(  0.1%)       3073(  0.1%)       4119(  0.1%)
+```
+##### 6. Quality filter 
+```r
+/mnt/research/rdp/public/thirdParty/usearch11.0.667_i86linux64 -fastq_eestats2 cut_merged.fastq -output cut_merged.pre_filtered.eestats2.txt -length_cutoffs 100,400,10
+
+/mnt/research/rdp/public/thirdParty/usearch11.0.667_i86linux64 -fastq_filter cut_merged.fastq -fastq_minlen 150 -fastq_maxee 0.5 -fastaout cut_merged_filtered.fa -fastaout_discarded merged.no_filter.fa -fastqout cut_merged_filtered.fastq
+
+# output
+100.0% Filtering, 92.5% passed 
+   3081551  Reads (3.1M)                    
+    140047  Discarded reads with expected errs > 0.50
+   2849338  Filtered reads (2.8M, 92.5%)
+#####################################################
+
+/mnt/research/rdp/public/thirdParty/usearch11.0.667_i86linux64 -fastq_eestats2 cut_merged_filtered.fastq -output cut_merged.post_filtered.eestats2.txt -length_cutoffs 150,400,10
+```
+### Clustering
+
+##### 7. Find the set of unique sequences (dereplication)
+```r
+/mnt/research/rdp/public/thirdParty/usearch11.0.667_i86linux64 -fastx_uniques cut_merged_filtered.fastq -fastaout derep_filtered_cut_merged.fasta -sizeout
+
+#output
+2849338 seqs, 469224 uniques, 307561 singletons (65.5%)
+```
+##### 8. Open reference-based OTU picking (using UNITE_v.8.0 at 97% identity treshhold)
+```r
+/mnt/research/rdp/public/thirdParty/usearch11.0.667_i86linux64 -usearch_global derep_filtered_cut_merged.fasta -id 0.97 -db /mnt/research/ShadeLab/UNITE_v.8.0/sh_refs_qiime_ver8_97_02.02.2019.fasta  -strand plus -uc ref_seqs.uc -dbmatched UNITE_reference.fasta -notmatched UNITE_failed_closed.fq
+
+# output
+59.3% matched
+```
+##### 9. Sorting by size and de novo-based OTU picking on sequences that failed to hit reference
+```r
+/mnt/research/rdp/public/thirdParty/usearch11.0.667_i86linux64  -sortbysize UNITE_failed_closed.fq -fastaout sorted_UNITE_failed_closed.fq
+
+/mnt/research/rdp/public/thirdParty/usearch11.0.667_i86linux64  -cluster_otus sorted_UNITE_failed_closed.fq -minsize 2 -otus de_novo_otus.fasta -uparseout uparse_otus.txt -relabel OTU_
+
+# output
+2005 OTUs, 472 chimeras
+```
+##### 10. Combine the seqs of de novo and reference-based OTU picking
+```r
+cat UNITE_reference.fasta de_novo_otus.fasta > REP_seq.fna
+
+# numbering the OTUs for CONSTAX input
+/mnt/home/bintarti/python_scripts-master/fasta_number.py REP_seq.fna OTU_ > NUMB_REP_seq.fasta
+```
+##### 11. Construct OTU table 
+```r
+/mnt/research/rdp/public/thirdParty/usearch11.0.667_i86linux64 -usearch_global mergedfastq/merged.fastq -db NUMB_REP_seq.fasta -strand plus -id 0.97 -uc OTU_map.uc -otutabout OpenRef_OTU_table.txt
+
+# output
+2937403 / 3081862 mapped to OTUs (95.3%)  
+```
+### Taxonomic classification using CONSTAX
+Please refer to how 'Running CONSTAX on the MSU HPCC' on lab guru: <https://my.labguru.com/knowledge/documents/330>. Here is the publication about CONSTAX tool <https://bmcbioinformatics.biomedcentral.com/articles/10.1186/s12859-017-1952-x> and how to use it <https://github.com/natalie-vandepol/compare_taxonomy>. **Note**: CONSTAX uses python 2.7 to be able to run. HPCC default python is python3 and you can install python 2.7 on hpcc
+
+```r
+# check python version
+python --version
+
+# if you have python3 installed and want to swap to python2
+conda create -n python2 python=2.7 anaconda
+conda activate python2
+
+# download "CONSTAX_hpcc.tar.gz" from the lab guru link above. Put and extract the file on your home directory on hpcc.
+# open "CONSTAX_hpcc" directory and follow the instructions from the lab guru link above.
+# use the file 'consensus_taxonomy.txt' in the 'outputs' directory as your taxonomy table.
+```
+##### 12. Convert .txt file to .biom file (if you need .biom file!)
+```r
+biom convert -i OpenRef_OTU_table.txt -o OpenRef_OTU_table.biom --table-type="OTU table" --to-json
+
+# summarize OTU table
+biom summarize-table -i OpenRef_OTU_table.biom -o OpenRef_OTU_table_sum.txt
+
+```
+##### 13. Check any eukaryotes contaminant
+```r
+# inspect the 'consensus_taxonomy.txt' generated by CONSTAX tool. 
+grep "zoa" consensus_taxonomy.txt 
+# I found "Cercozoa" is assigned to several OTUs. 
+# transfer 'OpenRef_OTU_table.txt' and 'consensus_taxonomy.txt' to your local working directory.
+# remove the contaminant OTUs from taxonomy table and OTU table for further analysis on R.
+```
+Here is a useful link <https://wiki.hpcc.msu.edu/display/ITH/File+transfer#Filetransfer-UsingFileZilla(forMacandWindows)> for file transfer from MSU HPCC to local computer.
